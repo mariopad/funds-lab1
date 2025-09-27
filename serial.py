@@ -3,6 +3,7 @@ import numpy as np
 import random as rand
 import matplotlib.pyplot as plt
 import time
+import seaborn as sns
 
 # Parallelizable, but worth it??
 def initialize_centroids(data, K):
@@ -41,6 +42,20 @@ def initialize_centroids(data, K):
 # El output me dice a que centro corresponde cada punto
 # assignment_array = [5, 0, ..., K-1] con len(A)=len(ass_array)
 
+# Midpoint
+#def assign_clusters_sequential(data, centroid_array):
+#    assignment_array = []
+#    wcss_array = []
+#    for point in data:
+#        # Vectorized distance calculation for one point to all centroids
+#        distances = np.linalg.norm(centroid_array - point, axis=1)
+#        selected_cluster = np.argmin(distances)
+#        assignment_array.append(selected_cluster)
+#        wcss_array.append(distances[selected_cluster] ** 2)
+#    wcss = sum(wcss_array)
+#    return assignment_array, wcss
+
+
 def assign_clusters(data, centroid_array):
     distances = np.linalg.norm(data[:, np.newaxis, :] - centroid_array[np.newaxis, :, :], axis=2)
     assignment_array = np.argmin(distances, axis=1)
@@ -53,7 +68,7 @@ def update_centroids(data, K, assignment_array):
     n_features = data.shape[1]
     new_centroids = np.zeros((K, n_features))
     for ki in range(K):
-        cluster_points = data[np.array(assignment_array) == ki]
+        cluster_points = data[assignment_array == ki]
 
         if len(cluster_points)>0:
             new_centroids[ki] = np.mean(cluster_points, axis=0)
@@ -88,14 +103,18 @@ def distance_to_line(x0, y0, x1, y1, x2, y2):
 
 def elbow_method(data, K_max, max_iters, tol):
     #Curva wcss frente a K
+    timei = time.time()
     wcss_array = []
     K_array = range(1, K_max+1)
     for ki in K_array:
         _, _, wcssi = k_means_sequential(data, ki, max_iters, tol)
         wcss_array.append(wcssi)
     wcss_array = np.array(wcss_array)
+    timef = time.time()
+    print(f"Time spent in K loop: {timef-timei}")
 
     #Calcular la puta distancia de cada punto y guardar el elemento con menor distancia
+    timei = time.time()
     x1, y1 = 1, wcss_array[0]
     x2, y2 = K_max, wcss_array[-1]
     distances = []
@@ -104,26 +123,32 @@ def elbow_method(data, K_max, max_iters, tol):
         distances.append(d)
     distances = np.array(distances)
     optimal_K = K_array[np.argmax(distances)]
-
+    timef = time.time()
+    print(f"Time spent in calculating distances: {timef-timei}")
+    
     #Hacer el grafico y guardarlo
     plt.plot(K_array, wcss_array)
     plt.savefig('elbow_graph')
+    plt.close()
 
     return optimal_K
 
 
 if __name__ == "__main__":
     #Constants
-    K_max = 30
-    max_iters = 100
+    K_max = 15
+    max_iters = 1000
     tol = 1e-4
 
     #Register start time
     start_time = time.time()
 
     #Extraer los datos del csv
-    proteins_df = pd.read_csv('proteins.csv')
+    timei = time.time()
+    proteins_df = pd.read_csv('proteins.csv')#, nrows=100)
     proteins = proteins_df[['enzyme', 'hydrofob']].values # seleccionamos dos columnas y -> numpy
+    timef = time.time()
+    print(f"Time spent in extracting the data: {timef-timei}")
 
     #Elbow graph and optimal K
     optimal_K = elbow_method(proteins, K_max, max_iters, tol)
@@ -134,11 +159,18 @@ if __name__ == "__main__":
     assignment_array, centroids, _ = k_means_sequential(proteins, optimal_K, max_iters, tol)
 
     #Find cluster with highest sequence
-    #hacer un histograma a assignment array y probablemente rente paralelizarlo
+    max_cluster = np.bincount(assignment_array).argmax()
 
     #Graphs
     #Cluster with centroids
+    plt.scatter(proteins[:, 0], proteins[:, 1], c=assignment_array, cmap='tab10')
+    plt.scatter(centroids[:, 0],centroids[:, 1],marker = '^',c = 'red')
+    plt.savefig('hola')
+
     #Heat map clusters' centroids
+    sns.heatmap(centroids, cmap="viridis")
+    plt.savefig('heatmap')
+    plt.close()
     #Print stuff of the highest sequence cluster
 
     end_time = time.time()
