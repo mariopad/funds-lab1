@@ -8,7 +8,7 @@ import seaborn as sns
 # Parallelizable, but worth it??
 def initialize_centroids(data, K):
     indices = np.random.choice(len(data), size=K, replace=False)
-    return data[indices]
+    return data[indices].astype(np.float32)
 
 # Xcj = [[x1, y1], ..., [xj,yj]]
 # Xi = data = [[x1, y1], ..., [xi,yi]]
@@ -56,30 +56,84 @@ def initialize_centroids(data, K):
 #    return assignment_array, wcss
 
 
-def assign_clusters(data, centroid_array):
-    distances = np.linalg.norm(data[:, np.newaxis, :] - centroid_array[np.newaxis, :, :], axis=2)
-    assignment_array = np.argmin(distances, axis=1)
-    min_distances = distances[np.arange(len(data)), assignment_array]
-    wcss = np.sum(min_distances ** 2)
+#def assign_clusters(data, centroid_array):
+#    distances = np.linalg.norm(data[:, np.newaxis, :] - centroid_array[np.newaxis, :, :], axis=2)
+#    assignment_array = np.argmin(distances, axis=1)
+#    min_distances = distances[np.arange(len(data)), assignment_array]
+#    wcss = np.sum(min_distances ** 2)
+#    return assignment_array, wcss
+
+def assign_clusters(data, centroids):
+    # Squared norms of data and centroids
+    data_norms = np.sum(data**2, axis=1).reshape(-1, 1)     # shape (N, 1)
+    centroid_norms = np.sum(centroids**2, axis=1).reshape(1, -1)  # shape (1, K)
+
+    # Dot product between all data points and centroids
+    dot_products = np.dot(data, centroids.T)                # shape (N, K)
+
+    # Squared Euclidean distance matrix
+    dists_squared = data_norms + centroid_norms - 2 * dot_products
+
+    # Ensure numerical stability (eliminate tiny negatives due to float precision)
+    dists_squared = np.maximum(dists_squared, 0)
+
+    # Assign to closest centroid
+    assignment_array = np.argmin(dists_squared, axis=1)
+
+    # Compute WCSS as sum of min distances squared
+    min_dists = dists_squared[np.arange(len(data)), assignment_array]
+    wcss = np.sum(min_dists)
+
     return assignment_array, wcss
 
 
-def update_centroids(data, K, assignment_array):
-    n_features = data.shape[1]
-    new_centroids = np.zeros((K, n_features))
-    for ki in range(K):
-        cluster_points = data[assignment_array == ki]
+#def update_centroids(data, K, assignment_array):
+#    # Por si acaso aumentamos a una dimensión más, que no esté
+#    #hardcodeado
+#    n_features = data.shape[1]
+#    new_centroids = np.zeros((K, n_features), dtype=mp.float32)
+#    for ki in range(K):
+#        cluster_points = data[assignment_array == ki]
+#
+#        if len(cluster_points)>0:
+#            new_centroids[ki] = np.mean(cluster_points, axis=0)
+#        else:
+#            new_centroids[ki] = data[np.random.randint(0, len(data))]
+#    return new_centroids
 
-        if len(cluster_points)>0:
-            new_centroids[ki] = np.mean(cluster_points, axis=0)
-        else:
-            new_centroids[ki] = data[np.random.randint(0, len(data))]
+# big for loops are super slow in python
+def update_centroids(data, K, assignments):
+    n_features = data.shape[1]
+    new_centroids = np.zeros((K, n_features), dtype=np.float32)
+    counts = np.bincount(assignments, minlength=K)
+
+    # Avoid division by zero
+    empty_clusters = (counts == 0)
+    counts[empty_clusters] = 1
+       
+    # Sum each cluster's points. n_features low, better to keep
+    for dim in range(n_features):
+        new_centroids[:, dim] = np.bincount(assignments, weights=data[:, dim], minlength=K)
+
+    # Divide by count to get mean
+    new_centroids /= counts[:, None]
+
+    #Reinitialize empty clusters if any
+    if empty_clusters.any():
+        new_centroids[empty_clusters] = data[np.random.choice(len(data), size=empty_clusters.sum())]
+     
     return new_centroids
 
-def check_convergence(old_centroids, new_centroids, tol=1e-4):
-    return np.linalg.norm(old_centroids - new_centroids) < tol
 
-def k_means_sequential(data, K, max_iters=100, tol=1e-4):
+#def check_convergence(old_centroids, new_centroids, tol=1e-4):
+#    return np.linalg.norm(old_centroids - new_centroids) < tol
+
+# Slightly faster
+def check_convergence(old_centroids, new_centroids, tol=1e-4):
+    diff = old_centroids - new_centroids
+    return np.sum(diff * diff) < tol ** 2
+
+def k_means_sequential(data, K, max_iters=500, tol=1e-4):
     old_centroids = initialize_centroids(data, K)
     for _ in range(max_iters):
         assignment_array, wcss = assign_clusters(data, old_centroids)
@@ -101,7 +155,14 @@ def distance_to_line(x0, y0, x1, y1, x2, y2):
     den = np.sqrt((y2 - y1)**2 + (x2 - x1)**2)
     return num / den
 
-def elbow_method(data, K_max, max_iters, tol):
+def elbow_method(data, K_max, max_iters, tol, sample_size=1000):
+    #Por inspección de los datos, podemos ver que el patrón
+    # se aprecia bastante bien con tan solo 1e3 datos.
+    #Por esto, consideramos que es un overkill usar todo
+    # el dataset para determinar K_opt
+    if len(data) > sample_size:
+        data = data[np.random.choice(len(data), size=sample_size, replace=False)]
+
     #Curva wcss frente a K
     timei = time.time()
     wcss_array = []
@@ -118,7 +179,7 @@ def elbow_method(data, K_max, max_iters, tol):
     x1, y1 = 1, wcss_array[0]
     x2, y2 = K_max, wcss_array[-1]
     distances = []
-    for i, (x0, y0) in enumerate(zip(K_array, wcss_array)):
+    for x0, y0 in zip(K_array, wcss_array):
         d = distance_to_line(x0, y0, x1, y1, x2, y2)
         distances.append(d)
     distances = np.array(distances)
@@ -133,7 +194,6 @@ def elbow_method(data, K_max, max_iters, tol):
 
     return optimal_K
 
-
 if __name__ == "__main__":
     #Constants
     K_max = 15
@@ -145,8 +205,8 @@ if __name__ == "__main__":
 
     #Extraer los datos del csv
     timei = time.time()
-    proteins_df = pd.read_csv('proteins.csv')#, nrows=100)
-    proteins = proteins_df[['enzyme', 'hydrofob']].values # seleccionamos dos columnas y -> numpy
+    proteins_df = pd.read_csv('proteins.csv')#, nrows=100000)
+    proteins = proteins_df[['enzyme', 'hydrofob']].values.astype(np.float32) # seleccionamos dos columnas y -> numpy
     timef = time.time()
     print(f"Time spent in extracting the data: {timef-timei}")
 
@@ -167,7 +227,7 @@ if __name__ == "__main__":
     plt.scatter(centroids[:, 0],centroids[:, 1],marker = '^',c = 'red')
     plt.savefig('hola')
 
-    #Heat map clusters' centroids
+    #Heat map clusters' centroids. Normalization needed
     sns.heatmap(centroids, cmap="viridis")
     plt.savefig('heatmap')
     plt.close()
